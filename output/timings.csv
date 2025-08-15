@@ -1,0 +1,11 @@
+name,dt_sec
+stage0: load+scale,0.007826
+stage0: quantize_mm,0.004715
+stage1: snap_points,0.009587
+stage1: pick_grid_params,0.001199
+stage1: build_grid,2.441742
+STAGE0_1 total,2.465280
+stage2: find_cycles,0.002275
+stage2: make_templates,0.005128
+stage2: save_templates,0.000665
+STAGE2 total,0.008086
