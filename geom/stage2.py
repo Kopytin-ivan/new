@@ -2,7 +2,7 @@
 import json
 from typing import Optional
 
-from .cycles import find_simple_cycles
+from geom.cycles import find_planar_faces as find_cycles
 from .templates import make_template, TemplatesDB
 
 def stage2_build_and_save_templates(
@@ -14,7 +14,7 @@ def stage2_build_and_save_templates(
 ):
     # 1) найти циклы
     if prof: prof.start("stage2: find_cycles")
-    cycles = find_simple_cycles(G)
+    cycles = find_cycles(G)
     if prof: prof.stop("stage2: find_cycles")
 
     # 2) делать шаблоны + дедуп по ключу (в памяти)

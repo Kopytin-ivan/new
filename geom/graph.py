@@ -15,3 +15,37 @@ class Graph:
 
     def edge_nodes(self, eid):
         return self.edges[eid]
+    
+    def add_node(self, xy):
+        nid = len(self.nodes)
+        self.nodes.append(tuple(xy))
+        if nid not in self.adj:
+            self.adj[nid] = []
+        return nid
+
+    def add_edge(self, u, v):
+        eid = len(self.edges)
+        self.edges.append((u, v))
+        self.adj[u].append(eid)
+        self.adj[v].append(eid)
+        return eid
+
+    def remove_edge(self, eid):
+        u, v = self.edges[eid]
+        self.edges[eid] = (-1, -1)
+        if eid in self.adj.get(u, []): self.adj[u].remove(eid)
+        if eid in self.adj.get(v, []): self.adj[v].remove(eid)
+
+    def split_edge(self, eid, xy):
+        """Разрезает ребро eid точкой xy. Возвращает (nid_new, eid1, eid2)."""
+        u, v = self.edges[eid]
+        assert u != -1 and v != -1, "edge removed"
+        nid = self.add_node(xy)
+        self.remove_edge(eid)
+        e1 = self.add_edge(u, nid)
+        e2 = self.add_edge(nid, v)
+        return nid, e1, e2
+
+    def clone(self):
+        import copy
+        return copy.deepcopy(self)

@@ -60,70 +60,197 @@ def _next_neighbor(G, prev_node, curr_node):
     else:
         return (e2, v2)
 
+# geom/cycles.py
+from collections import defaultdict, deque
+
 def find_simple_cycles(G):
-    cycles = []
-    for comp in connected_components(G):
-        if not is_degree2_component(G, comp):
-            continue
-        # boolean-маркировка рёбер компоненты
-        comp_edges = _component_edges(G, comp)
-        if not comp_edges:
-            continue
-        visited = {eid: False for eid in comp_edges}
+    """
+    Возвращает список простых циклов как списки node_id в порядке обхода.
+    Работает на общем неориентированном графе (узлы могут иметь любую степень).
+    Алгоритм: строим остов (DFS/BFS) по компонентам; для каждого нетростового ребра (u,v)
+    восстанавливаем путь u→v по остову и получаем фундаментальный цикл.
+    Дедупликуем циклы канонизацией (минимальная ротация + выбор направления).
+    """
+    n = len(G.nodes)
+    adj = defaultdict(list)
+    for eid, (u, v) in enumerate(G.edges):
+        adj[u].append(v)
+        adj[v].append(u)
 
-        # стартуем из узлов компоненты, вытягиваем орбиты
-        for start in comp:
-            # возьмём первое неиспользованное ребро у старта
-            e0 = None
-            for eid in G.adj[start]:
-                if eid in visited and not visited[eid]:
-                    e0 = eid
-                    break
-            if e0 is None:
+    seen_cycles = set()
+    out_cycles = []
+
+    seen_node = set()
+    for root in range(n):
+        if root in seen_node or root not in G.adj:
+            continue
+
+        # BFS-остов для компоненты
+        parent = {root: None}
+        depth  = {root: 0}
+        order  = []
+        q = deque([root])
+        seen_node.add(root)
+
+        while q:
+            u = q.popleft()
+            order.append(u)
+            for v in adj[u]:
+                if v not in parent:
+                    parent[v] = u
+                    depth[v]  = depth[u] + 1
+                    seen_node.add(v)
+                    q.append(v)
+
+        # множество остовных рёбер (для быстрого теста)
+        tree_edges = set()
+        for v in parent:
+            u = parent[v]
+            if u is not None:
+                a, b = (u, v) if u < v else (v, u)
+                tree_edges.add((a, b))
+
+        # хелпер: путь между двумя вершинами по остову
+        def path_between(a, b):
+            pa, pb = [a], [b]
+            ua, ub = a, b
+            # выровнять глубины
+            while depth[ua] > depth[ub]:
+                ua = parent[ua]; pa.append(ua)
+            while depth[ub] > depth[ua]:
+                ub = parent[ub]; pb.append(ub)
+            # подниматься до LCA
+            while ua != ub:
+                ua = parent[ua]; pa.append(ua)
+                ub = parent[ub]; pb.append(ub)
+            lca = ua
+            # цикл: a..LCA + reverse(b..LCA без повторения LCA)
+            return pa + list(reversed(pb[:-1]))
+
+        # обойти нетростовые рёбра и собрать фундаментальные циклы
+        visited_back = set()
+        for u in parent.keys():
+            for v in adj[u]:
+                a, b = (u, v) if u < v else (v, u)
+                if (a, b) in tree_edges:
+                    continue  # остовное ребро
+                if (a, b) in visited_back:
+                    continue
+                visited_back.add((a, b))
+
+                # соберём цикл
+                cyc = path_between(u, v)
+                if len(cyc) < 3:
+                    continue
+
+                # канонизация для дедупликации
+                # — сдвиг до минимального id
+                k = len(cyc)
+                min_pos = min(range(k), key=lambda i: cyc[i])
+                rot1 = cyc[min_pos:] + cyc[:min_pos]
+                # — и обратное направление
+                rcyc = list(reversed(cyc))
+                min_pos_r = min(range(k), key=lambda i: rcyc[i])
+                rot2 = rcyc[min_pos_r:] + rcyc[:min_pos_r]
+                canon = tuple(rot2) if tuple(rot2) < tuple(rot1) else tuple(rot1)
+
+                if canon not in seen_cycles:
+                    seen_cycles.add(canon)
+                    out_cycles.append(list(canon))
+
+    return out_cycles
+
+# --- ВСТАВЬ НИЖЕ В КОНЕЦ geom/cycles.py ---
+import math
+from collections import defaultdict
+
+def _angle(p, q):
+    return math.atan2(q[1]-p[1], q[0]-p[0])
+
+def find_planar_faces(G, include_outer=False, right_hand=True):
+    """
+    Возвращает список границ граней (каждая — список node_id по кругу).
+    Алгоритм: half-edge обход. У каждого узла соседи сортируются по углу.
+    include_outer=False — внешнюю грань удаляем (по максимальной |площади|).
+    right_hand=True — правило правой руки; False — левой.
+    """
+    # 1) угловой порядок соседей
+    nbrs = {}
+    for u in range(len(G.nodes)):
+        if u not in G.adj:
+            continue
+        P = G.nodes[u]
+        seen = set()
+        neigh = []
+        for eid in G.adj[u]:
+            a, b = G.edge_nodes(eid)
+            v = b if a == u else a
+            if v in seen:
                 continue
+            seen.add(v)
+            ang = _angle(P, G.nodes[v])
+            neigh.append((ang, v))
+        neigh.sort()  # CCW
+        nbrs[u] = [v for _, v in neigh]
 
-            # первый шаг: старт → сосед
-            a, b = G.edge_nodes(e0)
-            curr = start
-            nxt = b if a == curr else a
-            visited[e0] = True
-            cycle_nodes = [curr, nxt]
-            prev = curr
-            curr = nxt
+    # 2) полурёбра
+    visited = set()  # направленные ребра (u,v)
 
-            # идём, пока не вернёмся в start
-            while True:
-                step = _next_neighbor(G, prev, curr)
-                if step is None:
-                    cycle_nodes = None
-                    break
-                eid_next, v_next = step
-                if eid_next in visited:
-                    if visited[eid_next]:
-                        # если ребро уже использовали — значит вернулись на пройденный путь:
-                        # либо цикл замкнулся, либо что-то пошло не так.
-                        if v_next == cycle_nodes[0]:
-                            # замыкание
-                            break
-                        else:
-                            cycle_nodes = None
-                            break
-                    visited[eid_next] = True
-                else:
-                    # ребро вне компоненты (не должно быть)
-                    cycle_nodes = None
-                    break
-                cycle_nodes.append(v_next)
-                prev, curr = curr, v_next
-                if curr == cycle_nodes[0]:
-                    break
+    def next_right(u, v):
+        """Из u->v поворачиваем 'вправо' вокруг v (берём соседа перед u в CCW-списке v)."""
+        L = nbrs.get(v)
+        if not L: return None
+        i = L.index(u)
+        return L[i-1] if right_hand else L[(i+1) % len(L)]
 
-            if cycle_nodes and len(cycle_nodes) >= 3:
-                # убрать последний дубликат, если есть
-                if cycle_nodes[0] == cycle_nodes[-1]:
-                    cycle_nodes = cycle_nodes[:-1]
-                # быстрый фильтр самоповторов
-                if len(set(cycle_nodes)) == len(cycle_nodes):
-                    cycles.append(cycle_nodes)
+    def face_walk(u0, v0):
+        u, v = u0, v0
+        cyc = [u]
+        while True:
+            visited.add((u, v))
+            cyc.append(v)
+            w = next_right(u, v)
+            if w is None:
+                return None
+            u, v = v, w
+            if (u, v) == (u0, v0):
+                break
+            if (u, v) in visited:
+                break
+        return cyc[:-1] if cyc and cyc[0] == cyc[-1] else cyc
 
-    return cycles
+    faces = []
+    for u in nbrs:
+        for v in nbrs[u]:
+            if (u, v) in visited:
+                continue
+            cyc = face_walk(u, v)
+            if not cyc or len(cyc) < 3:
+                continue
+            faces.append(cyc)
+
+    # 3) площадь и фильтр внешней
+    def area(cyc):
+        pts = [G.nodes[i] for i in cyc]
+        s = 0.0
+        for i in range(len(pts)):
+            x1, y1 = pts[i]
+            x2, y2 = pts[(i+1) % len(pts)]
+            s += x1*y2 - x2*y1
+        return 0.5*s
+
+    if not faces:
+        return []
+
+    # внешняя грань — с максимальной |площади|
+    if not include_outer:
+        outer_idx = max(range(len(faces)), key=lambda i: abs(area(faces[i])))
+        faces.pop(outer_idx)
+
+    # нормализуем направление (CCW)
+    out = []
+    for cyc in faces:
+        if area(cyc) < 0:
+            cyc = list(reversed(cyc))
+        out.append(cyc)
+    return out

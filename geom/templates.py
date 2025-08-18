@@ -19,8 +19,8 @@ def _largest_remainder_percent(lengths):
     if P <= 0:
         return [0] * len(lengths)
 
-    raw = [100.0 * L / P for L in lengths]                  # плавающие проценты
-    floor = [int(math.floor(x)) for x in raw]               # «пол»
+    raw = [100.0 * L / P for L in lengths]      # плавающие проценты
+    floor = [int(math.floor(x)) for x in raw]   # «пол»
     rema  = [(raw[i] - floor[i], i) for i in range(len(raw))]
     need = 100 - sum(floor)
 
@@ -40,10 +40,8 @@ def _largest_remainder_percent(lengths):
 
     return perc
 
-
-
 def _angles_internal(pts):
-    """Внутренние углы 0..180 (целые), с кешем направлений рёбер."""
+    """Внутренние углы 0..180 (целые), по направлению рёбер."""
     k = len(pts)
     # предвычислим единичные направления рёбер
     dirs = []
@@ -95,10 +93,9 @@ def _booth_min_rotation(seq):
     return start
 
 def _canonical_pairs(pairs):
-    """Канонизация: минимальная ротация (Booth) для прямой и обратной, берём лучшую."""
+    """Канонизация: минимальная ротация (Booth) для прямой и обратной; берём лучшую."""
     if not pairs:
         return []
-    n = len(pairs)
     # прямая
     s0 = _booth_min_rotation(pairs)
     cand_fwd = pairs[s0:] + pairs[:s0]
@@ -109,28 +106,29 @@ def _canonical_pairs(pairs):
     return cand_rev if cand_rev < cand_fwd else cand_fwd
 
 def make_template(G, cycle_nodes: List[int]) -> Dict[str, Any] | None:
+    """
+    Формирует шаблон циклической фигуры:
+      - углы (целые, внутренние);
+      - длины рёбер в процентах (целые, сумма=100, метод наибольших остатков);
+      - канонизация пар (угол, %) по минимальной ротации и реверсу.
+    """
     k = len(cycle_nodes)
     if k < 3:
         return None
+
     pts = [G.nodes[nid] for nid in cycle_nodes]
 
-    # длины
     lengths = [_dist(pts[i], pts[(i+1) % k]) for i in range(k)]
     if not any(L > 0 for L in lengths):
         return None
 
-    # проценты (ровно в сумме 100)
     perc = _largest_remainder_percent(lengths)
+    ang  = _angles_internal(pts)
 
-    # углы (с кешем направлений)
-    ang = _angles_internal(pts)
-
-    # пары и канонизация O(k)
     pairs = list(zip(ang, perc))
     canon = _canonical_pairs(pairs)
 
-    # ключ и текст
-    A = ",".join(str(a) for a, _ in canon)
+    A  = ",".join(str(a) for a, _ in canon)
     Ls = ",".join(str(p) for _, p in canon)
     K  = f"{k}|A={A}|L={Ls}"
     text = f"Форма #{k}: углы [{A.replace(',', '°, ')}°], длины [{Ls.replace(',', '%, ')}%]"
@@ -169,3 +167,67 @@ class TemplatesDB:
     def save(self, path):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(self.to_list(), f, ensure_ascii=False, indent=2)
+
+    def load(self, path):
+        """Подгружает ранее сохранённые шаблоны (если файл есть). Возвращает их число."""
+        import os
+        if not os.path.exists(path):
+            return 0
+        with open(path, "r", encoding="utf-8") as f:
+            arr = json.load(f)
+        for rec in arr:
+            self._byK[rec["K"]] = dict(rec)
+        return len(arr)
+
+    @staticmethod
+    def _seq_close_rot(A1, L1, A2, L2, ang_tol: int, len_tol: int) -> bool:
+        """
+        Проверка 'похожести' с допусками, с учётом циклического сдвига и реверса.
+        Все списки должны быть длины n.
+        """
+        n = len(A1)
+        if n == 0 or len(L1) != n or len(A2) != n or len(L2) != n:
+            return False
+
+        # прямое направление
+        for s in range(n):
+            ok = True
+            for i in range(n):
+                if abs(A1[i] - A2[(i + s) % n]) > ang_tol or abs(L1[i] - L2[(i + s) % n]) > len_tol:
+                    ok = False
+                    break
+            if ok:
+                return True
+
+        # обратное направление
+        Ar = list(reversed(A2))
+        Lr = list(reversed(L2))
+        for s in range(n):
+            ok = True
+            for i in range(n):
+                if abs(A1[i] - Ar[(i + s) % n]) > ang_tol or abs(L1[i] - Lr[(i + s) % n]) > len_tol:
+                    ok = False
+                    break
+            if ok:
+                return True
+
+        return False
+
+    def has_similar(self, tpl: Dict[str, Any], ang_tol: int = 2, len_tol: int = 5) -> bool:
+        """Есть ли в базе 'похожий' шаблон (по допускам)."""
+        A1 = tpl.get("angles", [])
+        L1 = tpl.get("percents", [])
+        n = len(A1)
+        if n < 3 or len(L1) != n:
+            return False
+
+        for rec in self._byK.values():
+            if rec.get("n") != n:
+                continue
+            A2 = rec.get("angles", [])
+            L2 = rec.get("percents", [])
+            if len(A2) != n or len(L2) != n:
+                continue
+            if TemplatesDB._seq_close_rot(A1, L1, A2, L2, ang_tol, len_tol):
+                return True
+        return False

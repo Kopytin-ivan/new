@@ -1,11 +1,13 @@
 name,dt_sec
-stage0: load+scale,0.007826
-stage0: quantize_mm,0.004715
-stage1: snap_points,0.009587
-stage1: pick_grid_params,0.001199
-stage1: build_grid,2.441742
-STAGE0_1 total,2.465280
-stage2: find_cycles,0.002275
-stage2: make_templates,0.005128
-stage2: save_templates,0.000665
-STAGE2 total,0.008086
+stage0: load+scale,0.005579
+stage0: quantize_mm,0.004087
+stage1: snap_points,0.009279
+stage1: pick_grid_params,0.001036
+stage1: build_grid,42.519215
+STAGE0_1 total,42.539415
+stage1.9: smart extend tails,1.015191
+stage1.95: rebuild grid after extend,39.137491
+stage2: find_faces,0.009743
+stage2: make_templates,0.021304
+stage2: save_templates,0.023004
+STAGE2 total,0.054125
