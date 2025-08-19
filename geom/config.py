@@ -1,28 +1,23 @@
-# config.py
-EPS_SNAP   = 2   # м, 1 мм
-GRID_CELL  = None    # подберём автоматически (см. ниже)
-R_QUERY    = None    # подберём как 3 * GRID_CELL
-MAX_EXTEND = 10    # м, 10 см
-ANGLE_TOL  = 2       # градусы
-LEN_TOL    = 5       # проценты
 PARAMS = {
-    "EPS_SNAP": 0.002,      # 1 мм (если ваши единицы — метры)
-    "MAX_EXTEND": 0.05,     # 5 см максимум продления (под ваш кейс)
-    "ANGLE_TOL": 2,         # ±2°
-    "LEN_TOL": 5,           # ±5%
+    "EPS_SNAP": 0.002,         # 2 мм
+    "MAX_EXTEND": 0.10,        # 100 мм
+    "ANGLE_TOL": 2,
+    "LEN_TOL": 5,
 
-    "DIR_TO_NEAR_RATIO": 2.0,   # коэффициент сравнения «луч» vs «к ближайшему»
-    "SEARCH_RADIUS": None,      # если None — используем R_QUERY
-    "TEMPLATE_ANG_TOL": 2,      # допуск по углам при сравнении с памятью, °
-    "TEMPLATE_LEN_TOL": 5,      # допуск по % длин при сравнении с памятью
+    "DIR_TO_NEAR_RATIO": 2.0,
+    "SEARCH_RADIUS": None,
+    "TEMPLATE_ANG_TOL": 2,
+    "TEMPLATE_LEN_TOL": 5,
 
-    # Эти два ниже пересчитаем автоматически после загрузки
     "GRID_CELL": None,
-    "R_QUERY":   None,
+    "R_QUERY": None,
 
-    "NEAR_PERP_MAX": 0.02,        # поперечный коридор для 'к ближайшему' (2 см)
-    "NEAR_FORWARD_MIN": 0.0,      # минимум вперёд по направлению (можно 0)
+    "NEAR_PERP_MAX": 0.010,    # 10 мм
+    "NEAR_FORWARD_MIN": 0.0,
+    "NEAR_MAX_KINK_DEG": 12,
+    "ISOLATED_EXT_MULT": 2.0,
 }
+
 def tune_spatial_grid(nodes_xy, params):
     # Оценим характерный шаг узлов: медиана расстояния до ближайшего соседа
     import numpy as np

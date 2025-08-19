@@ -45,6 +45,9 @@ class UniformGrid:
 def build_grid_from_graph(graph, cell, pad=0.0):
     grid = UniformGrid(cell)
     for eid, (u, v) in enumerate(graph.edges):
+        # Пропускаем удалённые рёбра (помечены как -1)
+        if u == -1 or v == -1:
+            continue
         a = graph.nodes[u]
         b = graph.nodes[v]
         grid.insert_segment(eid, a, b, pad=pad)

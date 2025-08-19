@@ -21,7 +21,7 @@ from geom.export_dxf import save_dxf_lines
 # создаём профайлер
 prof = Prof(enabled=True)
 
-def stage0_1_init(path_in, unit_scale=1.0):
+def stage0_1_init(path_in, unit_scale=0.001):
     # 0) загрузка и перевод единиц
     with prof.section("stage0: load+scale"):
         segs_in = load_segments(path_in)
@@ -66,9 +66,18 @@ def stage0_1_init(path_in, unit_scale=1.0):
 if __name__ == "__main__":
     os.makedirs("output", exist_ok=True)
 
-    # ---- Этап 0–1: загрузка → снап → сетка
+    # ---- Этап 0–1: загрузка → снап → сетка 
     with prof.section("STAGE0_1 total"):
-        G, grid, params = stage0_1_init(r"data\\linesln.json")  # ← поменяй имя, если у тебя другой файл
+        G, grid, params = stage0_1_init(r"data\\linesln.json", unit_scale=0.001)  
+
+    # --- проверка масштаба
+    xs = [x for x, y in G.nodes]
+    ys = [y for x, y in G.nodes]
+    bb = (min(xs), min(ys), max(xs), max(ys))
+    dx = bb[2] - bb[0]
+    dy = bb[3] - bb[1]
+    print(f"BBox: {bb}")
+    print(f"Size: {dx:.3f} x {dy:.3f} (в текущих внутренних единицах)")
 
     print("nodes:", len(G.nodes), "edges:", len(G.edges))
     print("params:", params)
@@ -174,4 +183,6 @@ if __name__ == "__main__":
     dxf_segs = [((float(a[0]), float(a[1])), (float(b[0]), float(b[1]))) for a, b in out_segs]
     out_dxf = os.path.join("output", "polylineOut.dxf")
     save_dxf_lines(dxf_segs, out_dxf, layer="OUTLINE", color=7, lineweight=25, insunits="Meters")
+
+
     print("saved:", out_dxf)
