@@ -16,7 +16,12 @@ PARAMS = {
     "NEAR_FORWARD_MIN": 0.0,
     "NEAR_MAX_KINK_DEG": 12,
     "ISOLATED_EXT_MULT": 2.0,
+    "CLOSED_BRIDGE_MAX": 0.20,      # максимальная дальность доводки от островка до host (внутр. единицы)
+    "BRIDGE_SEARCH_R_MULT": 1.5,
+    "BRIDGE_SEARCH_R": None,
 }
+
+
 
 def tune_spatial_grid(nodes_xy, params):
     # Оценим характерный шаг узлов: медиана расстояния до ближайшего соседа

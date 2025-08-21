@@ -1,13 +1,11 @@
 name,dt_sec
-stage0: load+scale,0.006725
-stage0: quantize_mm,0.002688
-stage1: snap_points,0.007923
-stage1: pick_grid_params,0.000735
-stage1: build_grid,0.785525
-STAGE0_1 total,0.803790
-stage1.9: smart extend tails,2.216688
-stage1.95: rebuild grid after extend,0.798188
-stage2: find_faces,0.004520
-stage2: make_templates,0.012019
-stage2: save_templates,0.010626
-STAGE2 total,0.027189
+stage0: load+scale,0.007154
+stage0: quantize_mm,0.002770
+stage1: snap_points,0.007956
+stage1: pick_grid_params,0.000874
+stage1: build_grid,0.746451
+STAGE0_1 total,0.765399
+stage1.9: smart extend tails,2.205659
+stage1.95: rebuild grid after tails,0.777905
+stage1.96: bridge closed islands → host,59.984358
+stage1.97: rebuild grid after bridges,0.359389

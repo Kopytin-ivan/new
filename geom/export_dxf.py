@@ -104,3 +104,76 @@ def _save_plain_ascii_dxf(segments, path, layer, color, lw, insunits):
 
     with open(path, "w", encoding="ascii", newline="\n") as f:
         f.write("\n".join(lines))
+
+
+# --- В КОНЕЦ geom/export_dxf.py ---
+
+from typing import List, Tuple
+
+Point = Tuple[float, float]
+
+def save_dxf_polyline(
+    points: List[Point],
+    path: str,
+    layer: str = "OUTER",
+    color: int = 7,
+    lineweight: int = 25,
+    insunits: str = "Meters",   # В МЕТРАХ, как и остальной пайплайн
+    closed: bool = True,
+) -> None:
+    try:
+        import ezdxf  # type: ignore
+
+        u = _INSUNITS.get(insunits, 6)  # 6 = Meters
+        doc = ezdxf.new(setup=True)
+        doc.header["$INSUNITS"] = u
+        doc.header["$MEASUREMENT"] = 1 if u in (4,5,6,7) else 0
+        try:
+            doc.units = u
+        except Exception:
+            pass
+
+        if layer not in doc.layers:
+            try:
+                doc.layers.add(name=layer, color=color, lineweight=lineweight)
+            except Exception:
+                doc.layers.add(name=layer, color=color)
+
+        msp = doc.modelspace()
+        pl = msp.add_lwpolyline(points, dxfattribs={"layer": layer, "color": color, "lineweight": lineweight})
+        if closed:
+            try:
+                pl.closed = True
+            except Exception:
+                # старые версии: установить флаг через DXF атрибуты
+                pl.set_dxf_attrib("flags", 1)  # bit 1 = closed
+
+        doc.saveas(path)
+
+    except Exception:
+        # ASCII fallback
+        iu = _INSUNITS.get(insunits, 6)
+        lines = []
+        push = lines.append
+        # HEADER
+        push("0"); push("SECTION"); push("2"); push("HEADER")
+        push("9"); push("$INSUNITS");    push("70"); push(str(iu))
+        push("9"); push("$MEASUREMENT"); push("70"); push("1")
+        push("0"); push("ENDSEC")
+        # TABLES (минимум)
+        push("0"); push("SECTION"); push("2"); push("TABLES"); push("0"); push("ENDSEC")
+        # ENTITIES
+        push("0"); push("SECTION"); push("2"); push("ENTITIES")
+        push("0"); push("LWPOLYLINE")
+        push("8"); push(layer)
+        push("62"); push(str(color))
+        push("370"); push(str(lineweight))
+        push("90"); push(str(len(points)))
+        push("70"); push("1" if closed else "0")  # closed flag
+        for x, y in points:
+            push("10"); push(f"{float(x):.12f}")
+            push("20"); push(f"{float(y):.12f}")
+        push("0"); push("ENDSEC"); push("0"); push("EOF")
+        with open(path, "w", encoding="ascii", newline="\n") as f:
+            f.write("\n".join(lines))
+
