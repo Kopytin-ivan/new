@@ -110,10 +110,9 @@ def _save_plain_ascii_dxf(segments, path, layer, color, lw, insunits):
 
 from typing import List, Tuple
 
-Point = Tuple[float, float]
 
 def save_dxf_polyline(
-    points: List[Point],
+    points: list[tuple[float, float]],
     path: str,
     layer: str = "OUTER",
     color: int = 7,

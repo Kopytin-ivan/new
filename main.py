@@ -15,9 +15,12 @@ from geom.cycles import find_planar_faces  # только чтобы засея�
 from geom.extend import close_tails_smart, connect_closed_islands_to_host
 from geom.export_dxf import save_dxf_lines
 
+from geom.outer import save_outer_via_faces_union
 
 from pathlib import Path
 from geom.outer import save_outer_from_graph
+from geom.outer import save_outer_best
+
 prof = Prof(enabled=True)
 
 def stage0_1_init(path_in, unit_scale=0.001):
@@ -121,20 +124,17 @@ if __name__ == "__main__":
     print("saved:", out_dxf)
 
     # === ВНЕШНИЙ КОНТУР ИЗ ФИНАЛЬНОГО ГРАФА (без переснэпа/перечтения)
-    out_stem = Path(out_json).stem  # 'polylineOut (округление до 5 знаков)'
+    out_stem = Path(out_json).stem
     out_outer_json = Path("output") / f"{out_stem}_outer.json"
     out_outer_dxf  = Path("output") / f"{out_stem}_outer.dxf"
 
-    meta_outer = save_outer_from_graph(
+    meta_outer = save_outer_best(
         G,
         out_json_path=str(out_outer_json),
         out_dxf_path=str(out_outer_dxf),
-        drop_leaves=True,       # срезать degree=1
-        leaf_len_mm=0.0         # можно 2–5 мм, если мешают короткие «шипы»
+        eps_snap_m=0.002,   # твой допуск (2 мм) для планаризации
     )
     print("outer meta:", meta_outer)
-    print("saved:", out_outer_json)
-    print("saved:", out_outer_dxf)
 
 
     # профилирование
