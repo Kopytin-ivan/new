@@ -1,5 +1,7 @@
 # geom/cycles.py
 from collections import deque
+import math
+
 
 def connected_components(G):
     seen = set()
@@ -167,90 +169,122 @@ from collections import defaultdict
 def _angle(p, q):
     return math.atan2(q[1]-p[1], q[0]-p[0])
 
-def find_planar_faces(G, include_outer=False, right_hand=True):
+
+def _angle_left_turn(ax, ay, bx, by):
+    """Подписанный поворот A→B: atan2(cross, dot) ∈ (-pi, pi]."""
+    cross = ax*by - ay*bx
+    dot   = ax*bx + ay*by
+    return math.atan2(cross, dot)
+
+import math
+from collections import defaultdict
+
+def _ang(p, q):
+    return math.atan2(q[1]-p[1], q[0]-p[0])
+
+def find_planar_faces(G, include_outer=False, right_hand=False):
     """
-    Возвращает список границ граней (каждая — список node_id по кругу).
-    Алгоритм: half-edge обход. У каждого узла соседи сортируются по углу.
-    include_outer=False — внешнюю грань удаляем (по максимальной |площади|).
-    right_hand=True — правило правой руки; False — левой.
+    Half-edge обход граней на PSLG:
+      - строит исходящие полурёбра ИЗ СПИСКА РЁБЕР (оба направления для каждого eid),
+      - сортирует их по углу CCW,
+      - метит посещение по ориентированному полурёбру (u,v,eid),
+      - next — минимальный левый поворот с отсечкой 'почти прямо'.
+    Возвращает список циклов (списки id вершин) CCW; по умолчанию без внешней (unbounded) грани.
     """
-    # 1) угловой порядок соседей
-    nbrs = {}
-    for u in range(len(G.nodes)):
-        if u not in G.adj:
+    # 1) исходящие полурёбра: u -> [(v, eid, theta)] (оба направления для каждого ребра)
+    out = defaultdict(list)
+    for eid, (u, v) in enumerate(G.edges):
+        if u == -1 or v == -1:
             continue
-        P = G.nodes[u]
-        seen = set()
-        neigh = []
-        for eid in G.adj[u]:
-            a, b = G.edge_nodes(eid)
-            v = b if a == u else a
-            if v in seen:
+        Pu = G.nodes[u]; Pv = G.nodes[v]
+        out[u].append((v, eid, _ang(Pu, Pv)))
+        out[v].append((u, eid, _ang(Pv, Pu)))
+    if not out:
+        return []
+
+    for u in out:
+        out[u].sort(key=lambda t: t[2])  # CCW
+
+    visited = set()  # ориентированные полурёбра (u, v, eid)
+    EPS_ANG = 1e-9   # отсечка 'почти прямо', можно повысить до 1e-7 при шуме
+
+    def next_left(u, v, eid):
+        cand = out.get(v)
+        if not cand:
+            return None
+        Vx, Vy = G.nodes[v]
+        Ux, Uy = G.nodes[u]
+        ax, ay = (Ux - Vx, Uy - Vy)  # вход: вектор v->u
+
+        best = None
+        best_delta = None
+        for (w, eid2, _) in cand:
+            Wx, Wy = G.nodes[w]
+            bx, by = (Wx - Vx, Wy - Vy)  # выход: вектор v->w
+            # поворот A->B: (-pi, pi] -> (0, 2pi]
+            cross = ax*by - ay*bx
+            dot   = ax*bx + ay*by
+            delta = math.atan2(cross, dot)
+            if delta <= 0.0:
+                delta += 2.0 * math.pi
+            # запрещаем 'прямо' (иначе «срезает» зуб)
+            if delta < EPS_ANG:
                 continue
-            seen.add(v)
-            ang = _angle(P, G.nodes[v])
-            neigh.append((ang, v))
-        neigh.sort()  # CCW
-        nbrs[u] = [v for _, v in neigh]
+            if best_delta is None or delta < best_delta - 1e-12:
+                best_delta = delta
+                best = (v, w, eid2)
+        return best
 
-    # 2) полурёбра
-    visited = set()  # направленные ребра (u,v)
-
-    def next_right(u, v):
-        """Из u->v поворачиваем 'вправо' вокруг v (берём соседа перед u в CCW-списке v)."""
-        L = nbrs.get(v)
-        if not L: return None
-        i = L.index(u)
-        return L[i-1] if right_hand else L[(i+1) % len(L)]
-
-    def face_walk(u0, v0):
-        u, v = u0, v0
+    def walk(u0, v0, e0):
+        u, v, eid = u0, v0, e0
         cyc = [u]
         while True:
-            visited.add((u, v))
+            visited.add((u, v, eid))
             cyc.append(v)
-            w = next_right(u, v)
-            if w is None:
+            nxt = next_left(u, v, eid) if not right_hand else None
+            if nxt is None:
                 return None
-            u, v = v, w
-            if (u, v) == (u0, v0):
+            u, v, eid = nxt
+            if (u, v, eid) == (u0, v0, e0):
                 break
-            if (u, v) in visited:
-                break
-        return cyc[:-1] if cyc and cyc[0] == cyc[-1] else cyc
+            if (u, v, eid) in visited:
+                return None
+        if len(cyc) >= 3 and cyc[0] == cyc[-1]:
+            cyc = cyc[:-1]
+        return cyc if len(cyc) >= 3 else None
 
     faces = []
-    for u in nbrs:
-        for v in nbrs[u]:
-            if (u, v) in visited:
+    for u, L in out.items():
+        for (v, eid, _) in L:
+            if (u, v, eid) in visited:
                 continue
-            cyc = face_walk(u, v)
-            if not cyc or len(cyc) < 3:
-                continue
-            faces.append(cyc)
-
-    # 3) площадь и фильтр внешней
-    def area(cyc):
-        pts = [G.nodes[i] for i in cyc]
-        s = 0.0
-        for i in range(len(pts)):
-            x1, y1 = pts[i]
-            x2, y2 = pts[(i+1) % len(pts)]
-            s += x1*y2 - x2*y1
-        return 0.5*s
+            cyc = walk(u, v, eid)
+            if cyc:
+                faces.append(cyc)
 
     if not faces:
         return []
 
-    # внешняя грань — с максимальной |площади|
-    if not include_outer:
-        outer_idx = max(range(len(faces)), key=lambda i: abs(area(faces[i])))
-        faces.pop(outer_idx)
+    # площадь
+    def area(cyc):
+        s = 0.0
+        k = len(cyc)
+        for i in range(k):
+            x1, y1 = G.nodes[cyc[i]]
+            x2, y2 = G.nodes[cyc[(i+1) % k]]
+            s += x1*y2 - x2*y1
+        return 0.5*s
 
-    # нормализуем направление (CCW)
-    out = []
+    # убрать внешнюю грань, если не просили включать
+    if not include_outer:
+        k = max(range(len(faces)), key=lambda i: abs(area(faces[i])))
+        faces.pop(k)
+
+    # нормализуем CCW
+    out_faces = []
     for cyc in faces:
         if area(cyc) < 0:
             cyc = list(reversed(cyc))
-        out.append(cyc)
-    return out
+        out_faces.append(cyc)
+    return out_faces
+

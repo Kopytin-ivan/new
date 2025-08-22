@@ -9,12 +9,156 @@ from geom.io import save_segments
 # Если у тебя уже есть эта функция из прошлого шага — оставь её и импортируй здесь:
 from geom.export_dxf import save_dxf_polyline  # пишет ОДНУ закрытую LWPOLYLINE в DXF (Meters)
 from geom.planarize import planarize_graph
+from geom.snap import snap_points
 
 from collections import defaultdict
 
 
 Point   = Tuple[float, float]
 Segment = Tuple[Point, Point]
+
+# === СИЛУЭТ: детерминированный обход по минимальному повороту по часовой ===
+import math
+from typing import List, Tuple, Dict
+from geom.graph import Graph
+from geom.io import save_segments
+from geom.export_dxf import save_dxf_polyline
+
+def _ang(p, q):
+    return math.atan2(q[1]-p[1], q[0]-p[0])  # [-pi, pi]
+
+def _cw_delta(theta_in, theta_out):
+    """δ = (theta_in - theta_out) mod 2π ∈ [0, 2π). Чем меньше, тем более 'по часовой'."""
+    d = theta_in - theta_out
+    while d < 0: d += 2*math.pi
+    while d >= 2*math.pi: d -= 2*math.pi
+    return d
+
+
+def _rebuild_with_snap(H: Graph, eps_snap: float) -> Graph:
+    segs = []
+    for (u, v) in H.edges:
+        if u == -1 or v == -1:
+            continue
+        x1, y1 = H.nodes[u]
+        x2, y2 = H.nodes[v]
+        segs.append(((x1, y1), (x2, y2)))
+    nodes2, edges2 = snap_points(segs, eps_snap)
+    return Graph(nodes2, edges2)
+
+
+def trace_outer_clockwise(G: Graph,
+                          start_policy: str = "min_yx",
+                          delta_eps: float = 1e-9) -> List[int]:
+    """
+    Возвращает один замкнутый цикл внешнего силуэта (список id вершин).
+    Правило: в каждой вершине берём исходящее ребро с МИНИМАЛЬНЫМ δ по часовой,
+    причём δ=0 (прямо) запрещаем, чтобы не 'срезать' зубья.
+    """
+    # 1) угловые списки соседей
+    nbrs = {}
+    for u in range(len(G.nodes)):
+        eids = G.adj.get(u, [])
+        if not eids:
+            continue
+        Pu = G.nodes[u]
+        L = []
+        for eid in eids:
+            a, b = G.edge_nodes(eid)
+            if a == -1 or b == -1: 
+                continue
+            v = b if a == u else a
+            L.append((_ang(Pu, G.nodes[v]), v, eid))
+        if L:
+            L.sort()  # CCW, но будем считать углы напрямую
+            nbrs[u] = [(ang, v, eid) for (ang, v, eid) in L]
+
+    if not nbrs:
+        return []
+
+    # 2) стартовая вершина
+    if start_policy == "min_yx":
+        s = min(nbrs.keys(), key=lambda i: (G.nodes[i][1], G.nodes[i][0]))
+    else:
+        s = next(iter(nbrs))
+
+    # 3) стартовое полуребро: самое "вправо" из s (минимальный угол к +X)
+    Pu = G.nodes[s]
+    e0 = min(nbrs[s], key=lambda t: t[0])   # минимальный atan2
+    theta_in = e0[0]                         # направ. входа в s -> v0
+    u, v, eid = s, e0[1], e0[2]
+    u0, v0, e0_id = u, v, eid
+
+    cyc = [u]
+    steps = 0
+    max_steps = 50 * max(1, sum(1 for (a,b) in G.edges if a!=-1 and b!=-1))
+
+    while steps < max_steps:
+        steps += 1
+        cyc.append(v)
+
+        # текущее направление входа в вершину v — это theta_in_v = угол(v -> u)
+        Pv = G.nodes[v]
+        theta_in_v = _ang(Pv, G.nodes[u])
+
+        # выбираем исходящее v->w с минимальным δ по часовой, причём δ > 0
+        best = None
+        best_delta = None
+        for (theta_vw, w, eid2) in nbrs.get(v, []):
+            if w == u and eid2 == eid:
+                continue  # не уходим сразу обратно
+            d = _cw_delta(theta_in_v, theta_vw)
+            if d <= delta_eps:
+                # δ=0 (прямо) запрещаем — иначе "срезает" зубья
+                continue
+            if (best_delta is None) or (d < best_delta - 1e-12):
+                best_delta = d
+                best = (v, w, eid2)
+
+        if best is None:
+            break
+
+        u, v, eid = best
+        # замыкание: вернулись ровно в начальную полурёберу
+        if (u, v, eid) == (u0, v0, e0_id):
+            break
+
+    if len(cyc) >= 3 and cyc[0] == cyc[-1]:
+        cyc = cyc[:-1]
+    return cyc if len(cyc) >= 3 else []
+
+def save_outer_clockwise(G: Graph, out_json_path: str, out_dxf_path: str) -> Dict:
+    cyc = trace_outer_clockwise(G)
+    if not cyc:
+        save_segments(out_json_path, [], params={"meta": {"faces": 0}, "source": "outer_cw"})
+        return {"faces": 0, "method": "outer_cw"}
+
+    # сегменты/точки
+    outline = [ (G.nodes[cyc[i]], G.nodes[cyc[(i+1)%len(cyc)]]) for i in range(len(cyc)) ]
+    pts = [G.nodes[i] for i in cyc]
+
+    # площадь и мета
+    s = 0.0
+    for i in range(len(cyc)):
+        x1,y1 = G.nodes[cyc[i]]
+        x2,y2 = G.nodes[cyc[(i+1)%len(cyc)]]
+        s += x1*y2 - x2*y1
+    area = 0.5*s
+    meta = {
+        "nodes": len(G.nodes),
+        "edges": sum(1 for u,v in G.edges if u!=-1 and v!=-1),
+        "faces": 1,
+        "signed_area": area,
+        "orientation": "CCW" if area>0 else "CW",
+        "method": "outer_cw"
+    }
+
+    save_segments(out_json_path, outline, params={"meta": meta, "source": "outer_cw"})
+    save_dxf_polyline(pts, out_dxf_path, layer="OUTER", color=7, lineweight=25,
+                      insunits="Meters", closed=True)
+    return meta
+
+
 
 # ---------- вспомогалки ----------
 
@@ -169,16 +313,50 @@ def _build_nbrs_with_eids(G: Graph):
         pos[u]  = {(v, eid): i for i, (v, eid) in enumerate(nbrs[u])}
     return nbrs, pos
 
-def _next_right_halfedge(nbrs, pos, u, v, eid, right_hand=True):
+def _next_right_halfedge(nbrs, pos, nodes, u, v, eid, right_hand=True):
+    """
+    Выбираем следующий half-edge в вершине v:
+    - перебираем кандидатов в порядке "самый правый";
+    - пропускаем немедленный разворот (возврат в u);
+    - пропускаем почти-прямое продолжение (угол ~ 0).
+    """
     L = nbrs.get(v)
-    if not L: 
+    if not L:
         return None
     i = pos[v].get((u, eid))
-    if i is None: 
+    if i is None:
         return None
-    j = (i - 1) % len(L) if right_hand else (i + 1) % len(L)
-    v2, eid2 = L[j]
-    return (v, v2, eid2)
+
+    EPS_ANG = 1e-9
+    n = len(L)
+    for k in range(1, n + 1):
+        j = (i - k) % n if right_hand else (i + k) % n
+        v2, eid2 = L[j]
+
+        # 1) не разворачиваемся назад
+        if v2 == u:
+            continue
+
+        # 2) отсечка "почти прямо"
+        Vx, Vy = nodes[v]
+        Ux, Uy = nodes[u]
+        Wx, Wy = nodes[v2]
+        ax, ay = (Ux - Vx, Uy - Vy)      # вход v->u
+        bx, by = (Wx - Vx, Wy - Vy)      # выход v->v2
+        import math
+        cross = ax * by - ay * bx
+        dot   = ax * bx + ay * by
+        delta = math.atan2(cross, dot)
+        if delta <= 0.0:
+            delta += 2.0 * math.pi
+        if delta < EPS_ANG:
+            continue
+
+        return (v, v2, eid2)
+
+    return None
+
+
 
 def trace_outer_by_giftwrap(G: Graph, right_hand=False, max_steps_factor=20):
     """
@@ -217,7 +395,7 @@ def trace_outer_by_giftwrap(G: Graph, right_hand=False, max_steps_factor=20):
     while visited_steps < max_steps:
         visited_steps += 1
         cyc.append(v)
-        nxt = _next_right_halfedge(nbrs, pos, u, v, eid, right_hand=right_hand)
+        nxt = _next_right_halfedge(nbrs, pos, H.nodes, u, v, eid, right_hand=True)
         if nxt is None:
             break
         u, v, eid = nxt
@@ -373,7 +551,7 @@ def extract_outer_via_faces_union(G: Graph, eps_snap_m: float = 0.002):
     Возвращает (cyc_nodes, Graph H, все_циклы).
     """
     H = planarize_graph(G, eps=eps_snap_m)
-
+    H = _rebuild_with_snap(H, eps_snap_m)
     faces = find_planar_faces(H, include_outer=False, right_hand=False)  # только внутренние
     if not faces:
         return [], H, []
@@ -404,6 +582,7 @@ def extract_outer_via_faces_union(G: Graph, eps_snap_m: float = 0.002):
 def save_outer_via_faces_union(G: Graph, out_json_path: str, out_dxf_path: str,
                                eps_snap_m: float = 0.002) -> Dict:
     cyc, H, _ = extract_outer_via_faces_union(G, eps_snap_m=eps_snap_m)
+
     if not cyc:
         save_segments(out_json_path, [], params={"meta": {"faces": 0}})
         return {"faces": 0}
@@ -422,6 +601,88 @@ def save_outer_via_faces_union(G: Graph, out_json_path: str, out_dxf_path: str,
     }
 
     save_segments(out_json_path, outline, params={"meta": meta, "source": "faces_union"})
+    save_dxf_polyline(pts, out_dxf_path, layer="OUTER", color=7, lineweight=25,
+                      insunits="Meters", closed=True)
+    return meta
+
+def extract_outer_by_rightmost_on_H(G: Graph, eps_snap_m: float = 0.002):
+    """
+    1) Планаризуем исходный граф G → H (режем пересечения, T-стыки, перекрытия).
+    2) На H обходим границу внешней (неограниченной) грани:
+       стартуем из нижне-левой вершины, затем идём всегда
+       по "самому правому" повороту (_next_right_halfedge with right_hand=True).
+    Возвращает (список id узлов цикла, граф H).
+    """
+    H = planarize_graph(G, eps=eps_snap_m)
+    H = _rebuild_with_snap(H, eps_snap_m)
+    nbrs, pos = _build_nbrs_with_eids(H)
+    if not nbrs:
+        return [], H
+
+    # старт — вершина с минимальным y, при равенстве — с минимальным x
+    start = min(nbrs.keys(), key=lambda i: (H.nodes[i][1], H.nodes[i][0]))
+
+    # из старта берём полуребро с минимальным углом к +X (как "вправо")
+    Pu = H.nodes[start]
+    best = None
+    best_ang = +1e9
+    for v, eid in nbrs[start]:
+        ang = _angle(Pu, H.nodes[v])  # [-pi, pi]
+        if ang < best_ang:
+            best_ang = ang
+            best = (start, v, eid)
+    if best is None:
+        return [], H
+
+    u0, v0, e0 = best
+    u, v, eid = u0, v0, e0
+    cyc = [u0]
+
+    steps = 0
+    max_steps = 20 * max(1, sum(1 for a, b in H.edges if a != -1 and b != -1))
+
+    while steps < max_steps:
+        steps += 1
+        cyc.append(v)
+        nxt = _next_right_halfedge(nbrs, pos, H.nodes, u, v, eid, right_hand=True)
+        if nxt is None:
+            break
+        u, v, eid = nxt
+        if (u, v, eid) == (u0, v0, e0):
+            break
+
+    if len(cyc) >= 3 and cyc[0] == cyc[-1]:
+        cyc = cyc[:-1]
+    return (cyc if len(cyc) >= 3 else []), H
+
+
+def save_outer_by_rightmost_on_H(G: Graph,
+                                 out_json_path: str,
+                                 out_dxf_path: str,
+                                 eps_snap_m: float = 0.002) -> Dict:
+    """
+    Сохраняет внешний контур, найденный правым обходом на планаризованном графе H.
+    JSON — список сегментов; DXF — одна закрытая LWPOLYLINE (Meters).
+    """
+    cyc, H = extract_outer_by_rightmost_on_H(G, eps_snap_m=eps_snap_m)
+    if not cyc:
+        save_segments(out_json_path, [], params={"meta": {"faces": 0}, "source": "rightmost_on_planarized"})
+        return {"faces": 0, "method": "rightmost_on_planarized"}
+
+    outline = _cycle_to_segments(cyc, H)
+    pts     = _cycle_to_points(cyc, H)
+
+    area = _poly_area(cyc, H)
+    meta = {
+        "nodes": len(H.nodes),
+        "edges": sum(1 for u, v in H.edges if u != -1 and v != -1),
+        "faces": 1,
+        "signed_area": area,
+        "orientation": "CCW" if area > 0 else "CW",
+        "method": "rightmost_on_planarized",
+    }
+
+    save_segments(out_json_path, outline, params={"meta": meta, "source": "rightmost_on_planarized"})
     save_dxf_polyline(pts, out_dxf_path, layer="OUTER", color=7, lineweight=25,
                       insunits="Meters", closed=True)
     return meta

@@ -20,6 +20,8 @@ from geom.outer import save_outer_via_faces_union
 from pathlib import Path
 from geom.outer import save_outer_from_graph
 from geom.outer import save_outer_best
+from geom.outer import save_outer_by_rightmost_on_H
+from geom.outer import save_outer_clockwise
 
 prof = Prof(enabled=True)
 
@@ -67,77 +69,34 @@ def stage0_1_init(path_in, unit_scale=0.001):
 if __name__ == "__main__":
     os.makedirs("output", exist_ok=True)
 
-    # === Этап 0–1: загрузка → снап → сетка
-    with prof.section("STAGE0_1 total"):
-        G, grid, params = stage0_1_init(r"data\\linesln.json", unit_scale=0.001)
+    # 0–1) загрузка → снап → сетка (мм → м: unit_scale=0.001)
+    G, grid, params = stage0_1_init(r"data\\Test_Sminex_Avtozavodskaya_2.json", unit_scale=0.001)
 
-    print("nodes:", len(G.nodes), "edges:", len(G.edges))
-    print("params:", params)
-    if G.nodes:
-        x0, y0 = G.nodes[0]
-        print("candidates near node0:", len(grid.nearby_segments_by_point(x0, y0, params["R_QUERY"])))
-
-    # === Память шаблонов (минимально: подгрузим, затем засеем текущими замкнутыми)
-    tmem = TemplatesDB()
-    tmem.load(os.path.join("output", "closed_templates.json"))  # ок, если файла нет
-    faces0 = find_planar_faces(G, include_outer=False, right_hand=True)
-    for cyc in faces0:
-        tpl = make_template(G, cyc)
-        if tpl:
-            tmem.add(tpl)
-
-    # === 1) Умное доведение хвостов (по памяти → правило)
-    with prof.section("stage1.9: smart extend tails"):
-        ops1 = close_tails_smart(G, grid, PARAMS, templates_db=tmem, iter_max=5)
-        print("tails extended:", len(ops1))
-
-    # перестроим сетку после правок
-    with prof.section("stage1.95: rebuild grid after tails"):
+    # 2) умная доводка хвостов (без «памяти» — допускается None)
+    try:
+        ops1 = close_tails_smart(G, grid, PARAMS, templates_db=None, iter_max=5)
+    except Exception:
+        ops1 = []
+    if ops1:
         grid = build_grid_from_graph(G, PARAMS["GRID_CELL"], pad=PARAMS["EPS_SNAP"])
 
-    # === 2) Замкнутые острова: два параллельных мостика к host с минимальной суммой доводок
-    with prof.section("stage1.96: bridge closed islands → host"):
+    # 3) мостики для замкнутых островов → host
+    try:
         ops2 = connect_closed_islands_to_host(G, grid, PARAMS, rebuild_grid_each=True)
-        print("closed-island bridges:", len(ops2))
+    except Exception:
+        ops2 = []
 
-    # финальная перестройка сетки
-    with prof.section("stage1.97: rebuild grid after bridges"):
-        grid = build_grid_from_graph(G, PARAMS["GRID_CELL"], pad=PARAMS["EPS_SNAP"])
+    # 4) внешний контур (планаризация + объединение лиц) → один JSON и один DXF
+    out_json = "output/outer.json"
+    out_dxf  = "output/outer.dxf"
 
-    # === Экспорт ВСЕХ текущих сегментов (уже с доводкой и мостиками)
-    out_segs = []
-    for eid, (u, v) in enumerate(G.edges):
-        if u == -1 or v == -1:
-            continue
-        x1, y1 = G.nodes[u]
-        x2, y2 = G.nodes[v]
-        out_segs.append([[round(x1, 5), round(y1, 5)], [round(x2, 5), round(y2, 5)]])
-
-    out_json = os.path.join("output", "polylineOut (округление до 5 знаков).json")
-    with open(out_json, "w", encoding="utf-8") as f:
-        json.dump({"segments": out_segs}, f, ensure_ascii=False, indent=2)
-    print("saved:", out_json)
-
-    dxf_segs = [((float(a[0]), float(a[1])), (float(b[0]), float(b[1]))) for a, b in out_segs]
-    out_dxf = os.path.join("output", "polylineOut.dxf")
-    save_dxf_lines(dxf_segs, out_dxf, layer="OUTLINE", color=7, lineweight=25, insunits="Meters")
-    print("saved:", out_dxf)
-
-    # === ВНЕШНИЙ КОНТУР ИЗ ФИНАЛЬНОГО ГРАФА (без переснэпа/перечтения)
-    out_stem = Path(out_json).stem
-    out_outer_json = Path("output") / f"{out_stem}_outer.json"
-    out_outer_dxf  = Path("output") / f"{out_stem}_outer.dxf"
-
-    meta_outer = save_outer_best(
+    from geom.outer import save_outer_via_faces_union
+    save_outer_via_faces_union(
         G,
-        out_json_path=str(out_outer_json),
-        out_dxf_path=str(out_outer_dxf),
-        eps_snap_m=0.002,   # твой допуск (2 мм) для планаризации
+        out_json,
+        out_dxf,
+        eps_snap_m=0.002  # 2 мм; при необходимости можно повысить до 0.003–0.005
     )
-    print("outer meta:", meta_outer)
 
-
-    # профилирование
-    prof.report_console()
-    prof.dump_csv("output/timings.csv")
-    print("timings saved to output/timings.csv")
+    print("saved:", out_json)
+    print("saved:", out_dxf)
