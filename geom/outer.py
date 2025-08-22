@@ -184,6 +184,84 @@ def _cycle_to_segments(node_ids: List[int], G: Graph) -> List[Segment]:
 def _cycle_to_points(node_ids: List[int], G: Graph) -> List[Point]:
     return [G.nodes[nid] for nid in node_ids]
 
+
+# --- фильтр коротких Т-шипов (inward spurs) на планаризованном графе
+def _prune_inward_spurs(H: Graph,
+                        max_len_abs: float = 1.0,     # абсолютный лимит длины "шипа" (м)
+                        rel_len_ratio: float = 0.35,   # относительный лимит к длине кромки
+                        collinear_tol_deg: float = 7.0,# допуск на "почти коллинеарность"
+                        require_leaf: bool = True,     # удалять только если дальняя вершина — лист
+                        max_len: float | None = None   # ← алиас для старых вызовов
+                        ) -> Graph:
+    """
+    Безопасное удаление коротких внутренних Т-шипов.
+    """
+    # ---- back-compat: если передали старый параметр max_len — используем его
+    if max_len is not None:
+        max_len_abs = max_len
+
+    cos_col = math.cos(math.radians(180.0 - collinear_tol_deg))
+
+    def _deg_local(G: Graph, nid: int) -> int:
+        return sum(1 for _ in G.adj.get(nid, []) if _ != -1)
+
+    H2 = H.clone()
+    changed = True
+    while changed:
+        changed = False
+        to_drop = set()
+
+        for v in range(len(H2.nodes)):
+            eids = [eid for eid in H2.adj.get(v, []) if eid != -1]
+            if len(eids) < 3:
+                continue
+
+            Pv = H2.nodes[v]
+            nbrs = []  # (eid, u, dirx, diry, L)
+            for eid in eids:
+                a, b = H2.edge_nodes(eid)
+                if a == -1 or b == -1:
+                    continue
+                u = b if a == v else a
+                Pu = H2.nodes[u]
+                vx, vy = Pu[0] - Pv[0], Pu[1] - Pv[1]
+                L = math.hypot(vx, vy)
+                if L <= 1e-12:
+                    continue
+                nbrs.append((eid, u, vx / L, vy / L, L))
+            if len(nbrs) < 3:
+                continue
+
+            # 2 самых длинных рёбра в вершине
+            nbrs_sorted = sorted(nbrs, key=lambda x: x[4], reverse=True)
+            (e1, u1, i1x, i1y, L1), (e2, u2, i2x, i2y, L2) = nbrs_sorted[:2]
+
+            # почти-коллинеарность (кромка существует)
+            if i1x * i2x + i1y * i2y > cos_col:
+                continue
+
+            Lmin = min(L1, L2)
+            # кандидаты — всё, что не в кромке
+            for (eid, u, dx, dy, L) in nbrs_sorted[2:]:
+                if L > max_len_abs:
+                    continue
+                if L > rel_len_ratio * Lmin:
+                    continue
+                if require_leaf and _deg_local(H2, u) > 1:
+                    continue
+                to_drop.add(eid)
+
+        if to_drop:
+            for eid in to_drop:
+                H2.remove_edge(eid)
+            changed = True
+
+    return H2
+
+
+
+
+
 def prune_leaves(G: Graph, min_len: float = 0.0) -> Graph:
     """
     Итеративно срезает листья (degree=1) и, опц., короткие рёбра < min_len.
@@ -552,6 +630,16 @@ def extract_outer_via_faces_union(G: Graph, eps_snap_m: float = 0.002):
     """
     H = planarize_graph(G, eps=eps_snap_m)
     H = _rebuild_with_snap(H, eps_snap_m)
+    E_before = sum(1 for a,b in H.edges if a!=-1 and b!=-1)
+    H = _prune_inward_spurs(
+        H,
+        max_len_abs=3.0,        # можешь временно поднять до 3.0, чтобы увидеть эффект
+        rel_len_ratio=0.35,
+        collinear_tol_deg=7.0,
+        require_leaf=True
+    )
+    E_after  = sum(1 for a,b in H.edges if a!=-1 and b!=-1)
+    spur_dropped = E_before - E_after
     faces = find_planar_faces(H, include_outer=False, right_hand=False)  # только внутренние
     if not faces:
         return [], H, []
@@ -615,6 +703,16 @@ def extract_outer_by_rightmost_on_H(G: Graph, eps_snap_m: float = 0.002):
     """
     H = planarize_graph(G, eps=eps_snap_m)
     H = _rebuild_with_snap(H, eps_snap_m)
+    E_before = sum(1 for a,b in H.edges if a!=-1 and b!=-1)
+    H = _prune_inward_spurs(
+        H,
+        max_len_abs=3.0,        # можешь временно поднять до 3.0, чтобы увидеть эффект
+        rel_len_ratio=0.35,
+        collinear_tol_deg=7.0,
+        require_leaf=True
+    )
+    E_after  = sum(1 for a,b in H.edges if a!=-1 and b!=-1)
+    spur_dropped = E_before - E_after
     nbrs, pos = _build_nbrs_with_eids(H)
     if not nbrs:
         return [], H

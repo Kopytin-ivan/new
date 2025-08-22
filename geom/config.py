@@ -1,5 +1,5 @@
 PARAMS = {
-    "EPS_SNAP": 0.002,         # 2 мм
+    "EPS_SNAP": 0.011,         # 2 мм
     "MAX_EXTEND": 0.10,        # 100 мм
     "ANGLE_TOL": 2,
     "LEN_TOL": 5,
